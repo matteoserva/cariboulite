@@ -13,43 +13,53 @@ for that).
 ## Usage
 
 ```
-sudo tx_test [options] filename
+sudo tx_test [options] [filename]
 ```
 
-Samples always come from the given input: passing `filename` (or `-` for
-stdin) implicitly forces `-e 1` - the generated test-pattern mode is gone.
-`-e` is still accepted so old command lines keep working untouched.
-A missing filename prints the usage and aborts.
-
-Options (drop-in compatible with the historic command lines):
+By default samples are streamed from `filename` (or `-` for stdin), which
+is then required. With `-t` a test pattern is generated internally and no
+input is needed at all.
 
 | option | meaning | default |
 |--------|---------|---------|
 | `-c`   | TX channel (0: low, 1: high) | 0 |
 | `-f`   | frequency [Hz] | 915e6 |
 | `-r`   | sample rate [SPS] | 4000000 |
-| `-w`   | CW output enable | 0 |
 | `-g`   | gain 0..69, -1 = agc | 0 |
 | `-p`   | ppm error | 0 |
 | `-n`   | number of samples to write | 0 (stream until end of input) |
-| `-e`   | accepted for compatibility, has no effect (input streaming is forced) | - |
+| `-t`   | test pattern: 0 = from input, 1 = CW, 2 = NBFM | 0 |
+
+Test patterns (`-t`):
+
+- `1` - continuous wave, via the hardware CW output
+  (`cariboulite_radio_set_cw_outputs()`): the modem DAC input is forced to
+  constant I/Q, the streamed buffer content is ignored.
+- `2` - narrow-band FM: square-wave tone modulating the carrier with
+  ±3 kHz deviation, tone frequency stepping through
+  400 → 800 → 1000 → 1200 Hz, one step per second, looping. Generated
+  with a plain phase accumulator (`fm_fill()`) - it is a test signal, not
+  a compliant transmitter.
 
 Examples:
 
 ```
-# the input file alone is enough now (implicit -e 1):
-sudo tx_test -c 1 -f 433125000 -r 400000 -w 0 -g 0 ~/starwars_400k.bin
-
-# your historic invocation, still works exactly as before:
-sudo tx_test -c 1 -f 433125000 -r 400000 -w 0 -g 0 -e 1 ~/starwars_400k.bin
+# stream a file (int16 complex interleaved I/Q):
+sudo tx_test -c 1 -f 433125000 -r 400000 -g 0 ~/starwars_400k.bin
 
 # streaming from a pipe (stops when the pipe closes):
 some_iq_source | sudo tx_test -c 1 -f 433125000 -r 400000 -
+
+# continuous wave, no input required:
+sudo tx_test -c 1 -f 433125000 -t 1
+
+# NBFM test signal, no input required:
+sudo tx_test -c 1 -f 433125000 -t 2
 ```
 
-Without `-n` the tool streams until the file/pipe is exhausted (or
-Ctrl-C); `-n` additionally caps the sample count. Samples are int16
-complex interleaved I/Q.
+Without `-n` the tool streams forever (test patterns) or until the
+file/pipe is exhausted (default mode); Ctrl-C always stops it and `-n`
+caps the sample count.
 
 ## Building
 

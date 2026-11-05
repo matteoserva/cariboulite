@@ -8,8 +8,10 @@
  *     doing anything (use the flash_fpga tool to program it).
  *   - the -F (force FPGA reprogramming) option is therefore gone.
  *
- * Streamed samples come either from a generated pattern (-e 0, default)
- * or from a binary complex int16 I/Q file given as argument (-e 1).
+ * Streamed samples come either from a binary complex int16 I/Q file
+ * given as argument (default) or from an internally generated test
+ * pattern (-t 1: continuous wave, -t 2: NBFM with a stepping tone).
+ * Test patterns need no input file at all.
  */
 
 #ifndef ZF_LOG_LEVEL
@@ -34,6 +36,7 @@
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 //=======================================================================
 // INTERNAL VARIABLES AND DEFINITIONS
@@ -49,14 +52,13 @@ typedef struct
 {
     // Arguments
     char *filename;
-    int filename_enabled;
     int tx_channel;
+    int test_pattern;
     double frequency;
     float rate;
     float gain;
     float ppm_error;
     size_t samples_to_write;
-    int cw;
 
     // State
     int sample_infinite;
@@ -113,8 +115,7 @@ static void init_program_state(void)
     state.ppm_error = 0;
     state.samples_to_write = 0; // infinite
     state.rate = 4000000;
-    state.cw = 0;
-    state.filename_enabled = 0;
+    state.test_pattern = 0;
 
     // state
     state.sample_infinite = 1;
@@ -135,20 +136,21 @@ static void usage(void)
 		"\t-f frequency [Hz]\n"
 		"\t[-r sample rate (default: 4000000)]\n"
 		"\t[-g gain 0..69, -1 for agc (default: 0)]\n"
-		"\t[-w enable cw output (default: 0)]\n"
 		"\t[-p ppm_error (default: 0)]\n"
 		"\t[-n number of samples to write (default: 0, stop at end of input)]\n"
-		"\t[-e kept for command-line compatibility: file/stdin input is now\n"
-		"\t   forced whenever a filename is given, so -e 1 / -e 0 make no\n"
-		"\t   difference and the generated test pattern is gone]\n"
-		"\tfilename ('-' for stdin) - REQUIRED: samples always come from it\n\n"
+		"\t[-t test pattern to transmit (default: 0 = from input file)]:\n"
+		"\t   1: continuous wave (hardware CW output)\n"
+		"\t   2: NBFM, square tone stepping 400/800/1000/1200 Hz every second\n"
+		"\tfilename ('-' for stdin) - REQUIRED only with -t 0\n\n"
 		"Example:\n"
 		"\t1. Stream samples from file starwars_400k.bin\n"
-		"\t\ttx_test -c 1 -f 433125000 -r 400000 -w 0 -g 0 ~/starwars_400k.bin\n"
-		"\t2. Same command line as before still works (-e 1 is now implicit):\n"
-		"\t\ttx_test -c 1 -f 433125000 -r 400000 -w 0 -g 0 -e 1 ~/starwars_400k.bin\n"
-		"\t3. Stream from a pipe\n"
-		"\t\tsome_iq_source | tx_test -c 1 -f 433125000 -r 400000 -\n\n"
+		"\t\ttx_test -c 1 -f 433125000 -r 400000 -g 0 ~/starwars_400k.bin\n"
+		"\t2. Stream from a pipe\n"
+		"\t\tsome_iq_source | tx_test -c 1 -f 433125000 -r 400000 -\n"
+		"\t3. Continuous wave at 433.125MHz, no input needed\n"
+		"\t\ttx_test -c 1 -f 433125000 -t 1\n"
+		"\t4. NBFM test signal\n"
+		"\t\ttx_test -c 1 -f 433125000 -t 2\n\n"
 		"The FPGA must already be programmed - use flash_fpga if needed.\n");
 	exit(1);
 }
@@ -175,6 +177,44 @@ static int fpga_check_programmed(void)
 	io_utils_cleanup();
 
 	return cdone;
+}
+
+//=================================================
+/*
+ * NBFM (-t 2) generator. Deliberately dumb, it is only a test signal:
+ * narrowband FM, deviation +/-3 kHz, modulated by a square tone whose
+ * frequency steps through {400, 800, 1000, 1200} Hz once per second.
+ */
+static void fm_fill(cariboulite_sample_complex_int16 *buf, size_t samples)
+{
+    static const int tone_list[] = {400, 800, 1000, 1200};
+    const double devi_hz = 3000.0;
+    static double phase = 0;       /* accumulated RF phase [rad] */
+    static double tone_phase = 0;  /* audio square wave phase [0..1) */
+    static double sec = 0;
+    static int tone_idx = 0;
+
+    for (size_t i = 0; i < samples; i++)
+    {
+        double tone = tone_phase < 0.5 ? -1.0 : 1.0;
+
+        phase += 2.0 * M_PI * devi_hz * tone / state.rate;
+        if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
+        else if (phase < 0) phase += 2.0 * M_PI;
+
+        tone_phase += (double) tone_list[tone_idx] / state.rate;
+        if (tone_phase >= 1.0) tone_phase -= 1.0;
+
+        sec += 1.0 / state.rate;
+        if (sec >= 1.0)
+        {
+            sec = 0;
+            tone_idx = (tone_idx + 1) % (int) (sizeof(tone_list) / sizeof(tone_list[0]));
+        }
+
+        buf[i].i = (int16_t) (10000.0 * cos(phase));
+        buf[i].q = (int16_t) (10000.0 * sin(phase));
+    }
 }
 
 //=======================================================================
@@ -227,16 +267,13 @@ static int check_inputs(void)
 int analyze_arguments(int argc, char *argv[])
 {
     int opt;
-    while ((opt = getopt(argc, argv, "c:f:w:e:p:g:n:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:f:t:p:g:n:r:")) != -1) {
 		switch (opt) {
-		case 'e':
-			state.filename_enabled = atoi(optarg);
-			break;
 		case 'c':
 			state.tx_channel = (int)atoi(optarg);
 			break;
-		case 'w':
-			state.cw = (int)atoi(optarg);
+		case 't':
+			state.test_pattern = (int)atoi(optarg);
 			break;
 		case 'f':
 			state.frequency = atof(optarg);
@@ -261,24 +298,26 @@ int analyze_arguments(int argc, char *argv[])
 		}
 	}
 
-    if (argc <= optind)
+    if (state.test_pattern < 0 || state.test_pattern > 2)
+    {
+        ZF_LOGE("Invalid test pattern %d (valid: 0 = input file, 1 = CW, 2 = NBFM)", state.test_pattern);
+        return -1;
+    }
+
+    /* the input file is mandatory only in the default mode (-t 0): the
+     * generated patterns produce samples on their own */
+    if (state.test_pattern == 0 && argc <= optind)
     {
         usage();
         return -1;
     }
-    else state.filename = argv[optind];
+    if (argc > optind) state.filename = argv[optind];
 
-    /* a file or stdin passed on the command line forces input streaming:
-     * the generated test-pattern mode no longer exists. '-e' is still
-     * accepted above so old '-e 1' command lines keep working untouched.
-     * (a filename is mandatory anyway - analyze_arguments() prints the
-     * usage and fails when no positional argument is given) */
-    state.filename_enabled = 1;
-
-    printf("TX channel: %d, frequency: %.1f Hz, rate: %.0f, gain: %.0f, cw: %d, samples: %s, source: %s\n",
-            state.tx_channel, state.frequency, state.rate, state.gain, state.cw,
-            state.sample_infinite ? "until end of input" : "limited",
-            state.filename);
+    printf("TX channel: %d, frequency: %.1f Hz, rate: %.0f, gain: %.0f, samples: %s, source: %s\n",
+            state.tx_channel, state.frequency, state.rate, state.gain,
+            state.sample_infinite ? "unlimited" : "limited",
+            state.test_pattern == 0 ? state.filename :
+                            (state.test_pattern == 1 ? "generated: CW" : "generated: NBFM"));
     return 0;
 }
 
@@ -353,12 +392,18 @@ int main(int argc, char *argv[])
                                  (state.samples_to_write / state.native_write_len + 1) * state.native_write_len;
     }
 
+    // A generated pattern never reads from input: with -t 1 the modem is
+    // fed constant I/Q by the hardware itself, so the buffer content is
+    // irrelevant - zero it once and stream it for the DMA clock.
+    if (state.test_pattern == 1)
+        memset(state.buffer, 0, sizeof(cariboulite_sample_complex_int16) * state.native_write_len);
+
     // Init the radio
     //-------------------------------------
     // Set radio parameters
     cariboulite_radio_activate_channel(state.radio, cariboulite_channel_dir_tx, false);
     cariboulite_radio_set_frequency(state.radio, true, &state.frequency);
-    if (state.cw)
+    if (state.test_pattern == 1)
         cariboulite_radio_set_cw_outputs(state.radio, false, true);
     cariboulite_radio_set_tx_power(state.radio, 0);
     cariboulite_radio_sync_information(state.radio);
@@ -372,19 +417,22 @@ int main(int argc, char *argv[])
     }
     cariboulite_radio_activate_channel(state.radio, cariboulite_channel_dir_tx, true);
 
-    // Open the input file for reading (samples always come from input)
-    if (strcmp(state.filename, "-") == 0)
+    // Open the input file for reading (only the default mode streams input)
+    if (state.test_pattern == 0)
     {
-        state.file = stdin;
-    }
-    else
-    {
-        state.file = fopen(state.filename, "rb");
-        if (!state.file)
+        if (strcmp(state.filename, "-") == 0)
         {
-            ZF_LOGE("Failed to open %s", state.filename);
-            release_system();
-            return -1;
+            state.file = stdin;
+        }
+        else
+        {
+            state.file = fopen(state.filename, "rb");
+            if (!state.file)
+            {
+                ZF_LOGE("Failed to open %s", state.filename);
+                release_system();
+                return -1;
+            }
         }
     }
 
@@ -393,16 +441,26 @@ int main(int argc, char *argv[])
 	while (state.program_running)
 	{
         int ret = 0;
-        unsigned int len = sizeof(cariboulite_sample_complex_int16) * state.native_write_len;
-        size_t rret = fread(state.buffer, 1, len, state.file);
-        if (rret == 0)
+        size_t nsamples = state.native_write_len;
+
+        if (state.test_pattern == 0)
         {
-            ZF_LOGI("Sample input (%s) exhausted - stopping TX",
-                    state.file == stdin ? "stdin" : state.filename);
-            break;
+            size_t rret = fread(state.buffer, 1,
+                                sizeof(cariboulite_sample_complex_int16) * nsamples, state.file);
+            if (rret == 0)
+            {
+                ZF_LOGI("Sample input (%s) exhausted - stopping TX",
+                        state.file == stdin ? "stdin" : state.filename);
+                break;
+            }
+            nsamples = rret / sizeof(cariboulite_sample_complex_int16);
         }
-        ret = cariboulite_radio_write_samples(state.radio, state.buffer,
-                                              rret / sizeof(cariboulite_sample_complex_int16));
+        else if (state.test_pattern == 2)
+        {
+            fm_fill(state.buffer, nsamples);
+        }
+
+        ret = cariboulite_radio_write_samples(state.radio, state.buffer, nsamples);
 
         if (ret < 0)
         {

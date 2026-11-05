@@ -6,6 +6,7 @@
 #   release/flash_fpga         FPGA uploader    (software/flash_fpga, standalone cross build)
 #   release/tx_test            TX stream tester (software/tx_test, standalone cross build)
 #   release/smi_stream_dev.ko  kernel module    (driver/, cross kbuild vs rpi-sysroot headers)
+#   release/reload_kernel_module.sh  module reload helper (copied from scripts/, runnable on target)
 #
 # Targets:
 #   make [all]        build everything and populate release/
@@ -54,6 +55,7 @@ release: firmware flash_fpga tx_test driver
 	@u=$$(for f in $(TX_SRC) $(TX_NATIVE); do [ -x "$$f" ] && { echo "$$f"; break; }; done); \
 		 [ -n "$$u" ] || { echo "tx_test binary missing"; exit 1; }; cp -f "$$u" $(RELEASE_DIR)/tx_test
 	@[ -f $(KO_SRC) ] || { echo "driver module missing"; exit 1; }; cp -f $(KO_SRC) $(RELEASE_DIR)/
+	@cp -f $(SCRIPTS)/reload_kernel_module.sh $(RELEASE_DIR)/reload_kernel_module.sh
 	@echo "==> release/ contents:"
 	@ls -l $(RELEASE_DIR)
 

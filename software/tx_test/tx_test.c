@@ -1,12 +1,11 @@
 /*
  * tx_test - standalone CaribouLite TX streaming utility
  *
- * Same functionality as libcariboulite's src/tx_test.c, but built as a
- * self-contained tool. Differences from the library version:
+ * Built as a self-contained tool (the needed C part of libcariboulite is
+ * compiled from the source tree). Note:
  *   - NO FPGA programming: the tool assumes the FPGA is already
  *     configured and verifies it through the ICE40 CDONE pin before
  *     doing anything (use the flash_fpga tool to program it).
- *   - the -F (force FPGA reprogramming) option is therefore gone.
  *
  * Streamed samples come either from a binary complex int16 I/Q file
  * given as argument (default) or from an internally generated test

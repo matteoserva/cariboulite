@@ -1,12 +1,10 @@
 # tx_test
 
-Standalone CaribouLite TX stream test utility. Same job as
-`libcariboulite`'s `src/tx_test.c`, but built as a self-contained
+Standalone CaribouLite TX stream test utility, built as a self-contained
 project (the needed C part of the library is compiled from the source
 tree - no prebuilt libcariboulite, no SoapySDR).
 
-Key difference from the library version: **this tool never programs the
-FPGA**. Before touching anything it checks the ICE40 CDONE pin and
+**This tool never programs the FPGA**. Before touching anything it checks the ICE40 CDONE pin and
 refuses to run if the FPGA is not configured (use the `flash_fpga` tool
 for that).
 

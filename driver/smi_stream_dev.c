@@ -215,6 +215,19 @@ static inline int smi_is_active(struct bcm2835_smi_instance *inst)
 	return read_smi_reg(inst, SMICS) & SMICS_ACTIVE;
 }
 
+// dump the tx kfifo, only legal while the tx dma consumer is stopped
+// (the write callback drains it while the stream state is tx)
+static bool smi_stream_tx_can_flush(struct bcm2835_smi_dev_instance *inst)
+{
+	bool can;
+	unsigned long flags;
+
+	spin_lock_irqsave(&inst->state_lock, flags);
+	can = (inst->state != smi_stream_tx_channel);
+	spin_unlock_irqrestore(&inst->state_lock, flags);
+	return can;
+}
+
 static long set_state(struct bcm2835_smi_dev_instance *inst,smi_stream_state_en new_state)
 {
 	unsigned int new_address = calc_address_from_state(new_state);
@@ -236,6 +249,12 @@ static long set_state(struct bcm2835_smi_dev_instance *inst,smi_stream_state_en 
 		if (inst->state == smi_stream_tx_channel)
 		{
 			transfer_thread_stop(inst);
+			// drop any samples still queued for tx, so they are not
+			// transmitted on a future tx restart (the dma consumer is
+			// stopped here, so reset_out is safe against a concurrent
+			// producer that only touches the 'in' index)
+			kfifo_reset_out(&inst->tx_fifo);
+			inst->invalidate_tx_buffers = 1;
 		}
 		else
 		{
@@ -340,6 +359,20 @@ static void smi_refresh_dma_command(struct bcm2835_smi_dev_instance *inst, int n
 	write_smi_reg(smi_inst, smics_temp & 0xffff, SMICS);
 	inst->count_since_refresh = 0;
 	//print_smil_registers_ext("refresh 3");
+}
+
+/***************************************************************************/
+/* Zero the DMA bounce buffers so a (re)started transfer never re-sends the
+ * stale contents left over by a previous session until the producer
+ * refills them. Must be called with the transfer stopped. */
+static void smi_clear_bounce_buffer(struct bcm2835_smi_dev_instance *inst)
+{
+	struct bcm2835_smi_instance *smi_inst = inst->smi_inst;
+	int i;
+
+	for (i = 0; i < DMA_BOUNCE_BUFFER_COUNT; i++)
+		if (smi_inst->bounce.buffer[i])
+			memset(smi_inst->bounce.buffer[i], 0, DMA_BOUNCE_BUFFER_SIZE);
 }
 
 /***************************************************************************/
@@ -476,6 +509,9 @@ static void stream_smi_write_dma_callback(void *param)
 	else
 	{
 			inst->counter_missed++;
+			// no fresh data available: send silence instead of re-sending
+			// whatever the bounce buffer still holds from a previous run
+			memset(buffer_pos, 0, DMA_BOUNCE_BUFFER_SIZE/4);
 	}
 	
 	if(!(inst->current_read_chunk % 111 ))
@@ -543,6 +579,9 @@ int transfer_thread_init(struct bcm2835_smi_dev_instance *inst, enum dma_transfe
 	write_smi_reg(inst->smi_inst, 0, SMIL);
 	
 	sema_init(&inst->smi_inst->bounce.callback_sem, 0);
+
+	// start from a clean bounce buffer (no stale samples from a previous run)
+	smi_clear_bounce_buffer(inst);
 	
 	spin_lock(&inst->smi_inst->transaction_lock);
 	ret = smi_init_programmed_transfer(inst, dir, DMA_BOUNCE_BUFFER_SIZE/4);
@@ -753,9 +792,18 @@ static long smi_stream_ioctl(struct file *file, unsigned int cmd, unsigned long 
     //-------------------------------
     case SMI_STREAM_IOC_FLUSH_FIFO:
     {
-        // moved to read file operation
-        break;
-    }
+        // same semantics as read(fd, NULL, 0): drop pending samples
+        mutex_lock(&inst->read_lock);
+        kfifo_reset_out(&inst->rx_fifo);
+        mutex_unlock(&inst->read_lock);
+        inst->invalidate_rx_buffers = 1;
+        if (smi_stream_tx_can_flush(inst))
+        {
+            kfifo_reset_out(&inst->tx_fifo);
+            inst->invalidate_tx_buffers = 1;
+        }
+		break;
+	}
     //-------------------------------
 	default:
 		dev_err(inst->dev, "invalid ioctl cmd: %d", cmd);
@@ -807,7 +855,13 @@ static int smi_stream_release(struct inode *inode, struct file *file)
 	// make sure stream is idle
 	set_state(inst,smi_stream_idle);
 
-	
+	// the owning process is gone: drop any samples left queued for tx
+	// so a future run does not emit them
+	mutex_lock(&inst->write_lock);
+	kfifo_reset_out(&inst->tx_fifo);
+	mutex_unlock(&inst->write_lock);
+	inst->invalidate_tx_buffers = 1;
+
     	inst->address_changed = 0;
 
 	return 0;
@@ -831,6 +885,14 @@ static ssize_t smi_stream_read_file_fifo(struct file *file, char __user *buf, si
         kfifo_reset_out(&inst->rx_fifo);
         mutex_unlock(&inst->read_lock);
         inst->invalidate_rx_buffers = 1;
+
+        // flush the tx side as well (skipped while tx dma is running: the
+        // write callback would race on the fifo out index)
+        if (smi_stream_tx_can_flush(inst))
+        {
+            kfifo_reset_out(&inst->tx_fifo);
+            inst->invalidate_tx_buffers = 1;
+        }
 		return 0;
     }
 	

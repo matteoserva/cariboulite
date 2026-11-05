@@ -7,6 +7,86 @@ Features:
 
 The guide on how to use this version is in docs/notes/tutorial.txt
 
+## Quickstart: build on the host, transmit from the target
+
+Everything shippable is cross-built on the x86_64 host with one command.
+Host deps: `cmake`, `gcc-aarch64-linux-gnu`, and (for the bitstream only)
+`yosys`, `nextpnr-ice40`, `icepack`.
+
+```
+make                      # -> release/{top.bin,flash_fpga,tx_test,smi_stream_dev.ko,reload_kernel_module.sh}
+scp -r release pi@sdrpy:~/cariboulite/
+cd release
+```
+
+Individual artifacts: `make firmware`, `make flash_fpga`, `make tx_test`,
+`make driver` (add `F=1` to re-fetch the target kernel headers into
+`rpi-sysroot/`). The same tools can be built one by one with
+`scripts/build-standalone.sh [tool] [--deploy|--clean|-h]` and
+`scripts/build-driver.sh`. On-target builds must stay at `-j2`.
+
+**1. Program the FPGA** (required once per power cycle / after a new bitstream -
+`tx_test` never flashes, it refuses to run unless the ICE40 CDONE pin says "configured"):
+
+```
+sudo ./flash_fpga                 # picks up ./top.bin from release/
+sudo ./flash_fpga path/to/top.bin
+```
+
+**2. (Re)load the kernel module** - needed after each driver rebuild, kernel
+upgrade, or if `smi_stream_dev` was merely unloaded:
+
+```
+sudo bash ./reload_kernel_module.sh # modprobe -r smi_stream_dev; modprobe bcm2835_smi; insmod ./smi_stream_dev.ko
+lsmod | grep smi                  # verify
+```
+
+**3. Transmit** with `tx_test` (int16 complex interleaved I/Q, `-` = stdin,
+stops at end of input; Ctrl-C always stops it, `-n` caps the sample count):
+
+```
+sudo tx_test [options] [filename]
+
+  -c N   TX channel, 0 = low, 1 = high
+  -f Hz  frequency                                     (default 915e6)
+  -r SPS sample rate                                   (default 4000000)
+  -g N   gain 0..69, -1 = AGC                          (default 0)
+  -p N   ppm error                                     (default 0)
+  -n N   number of samples to write                    (default 0 = until end of input)
+  -t N   0 = from input (default), 1 = CW, 2 = NBFM    (no input needed with -t 1/2)
+```
+
+From a file, from a pipe, and with internally generated test patterns:
+
+```
+# arbitrary waveform from a file
+sudo tx_test -c 1 -f 433125000 -r 400000 -g 0 ~/starwars_400k.bin
+
+# from stdin - e.g. a pipe, a generator, or a live GNU Radio stream
+some_iq_source | sudo tx_test -c 1 -f 433125000 -r 400000 -
+cat /dev/urandom | sudo tx_test -c 1 -f 433125000 -r 400000 -
+# GNU Radio: listen on the target, stream from the host
+#   target: socat tcp-listen:9999,fork - | sudo tx_test -c 1 -f 433125000 -r 400000 -
+#   host:   cat iq.bin | socat - tcp-connect:sdrpy:9999
+
+# continuous wave (hardware CW output, no input at all)
+sudo tx_test -c 1 -f 433125000 -t 1
+
+# NBFM test signal: +/-3 kHz deviation, square tone 400/800/1000/1200 Hz, 1 s each
+sudo tx_test -c 1 -f 433125000 -t 2
+```
+
+To produce a waveform file offline (same NBFM pattern as `-t 2`, stdlib-only
+Python, writes `test_pattern_{rate}.bin`):
+
+```
+scripts/gen_test_pattern.py -r 4000000 -n 4 -o ~
+sudo tx_test -c 1 -f 433125000 -r 4000000 ~/test_pattern_4000000.bin
+```
+
+Full tool documentation: [software/tx_test/README.md](software/tx_test/README.md),
+[software/flash_fpga/README.md](software/flash_fpga/README.md).
+
 ___
  _
 ___

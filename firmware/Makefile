@@ -5,7 +5,7 @@ pcf_file = ./io.pcf
 SOURCES := $(wildcard *.v)
 
 top.bin: $(SOURCES)
-	yosys -p 'synth_ice40 -abc2 -top top -json $(filename).json -blif $(filename).blif' -p 'opt' -p 'ice40_opt' -p 'fsm_opt' $(filename).v | grep -i warning
+	yosys -p 'synth_ice40 -abc2 -dffe_min_ce_use 12 -top top -json $(filename).json -blif $(filename).blif' -p 'opt' -p 'ice40_opt' -p 'fsm_opt' $(filename).v | grep -i warning
 	#nextpnr-ice40 --lp1k --package qn84 --json $(filename).json --pcf $(pcf_file) --asc $(filename).asc
 	#false; while [ $$? != 0 ]; do nextpnr-ice40 --lp1k --package qn84 --json $(filename).json --pcf $(pcf_file) --asc $(filename).asc --freq 64 --opt-timing; done
 	nextpnr-ice40 --lp1k --package qn84 --json $(filename).json --pcf $(pcf_file) --asc $(filename).asc --freq 80 --parallel-refine --opt-timing --seed 5

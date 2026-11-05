@@ -1,0 +1,28 @@
+# Debian packages needed to build each artifact.
+# Versions are the candidates on the x86_64 Debian 13 (trixie) build host.
+# "target" = the Raspberry Pi running raspios.
+
+firmware top.bin (host):
+yosys 0.52, nextpnr-ice40 0.7, fpga-icestorm (~20250207; package name on trixie, bookworm calls it icestorm)
+plus cmake and build-essential: the `build` target regenerates the C blob with
+software/utils/generate_bin_blob (plain C, native gcc)
+
+tx_test, standalone (scripts/build-standalone.sh):
+host cross-build:  cmake 3.31, build-essential 12.12, gcc-aarch64-linux-gnu 14.2, openssh-client 10.0 (only for --deploy)
+target native:     cmake, build-essential
+(links only rt/m/pthread -- no sysroot, no libcariboulite/SoapySDR needed)
+
+flash_fpga, standalone (scripts/build-standalone.sh):
+same as tx_test
+
+kernel driver smi_stream_dev.ko:
+host cross-build (scripts/build-driver.sh):
+  rsync 3.5, openssh-client 10.0, gcc-aarch64-linux-gnu 14.2, build-essential,
+  bc 1.07, flex 2.6.4, bison 3.8, libelf-dev 0.192, libssl-dev 3.5, kmod 34
+  (kbuild host tools fixdep/modpost are vendored in scripts/kbuild-host-tools/,
+   nothing to install for those)
+target, once per kernel update (scripts/fetch-kernel-headers.sh):
+  rsync, linux-headers-$(uname -r)
+target, native out-of-tree build:
+  build-essential, linux-headers-$(uname -r), bc, flex, bison, libelf-dev,
+  libssl-dev, kmod

@@ -3,6 +3,8 @@ Containing all the software side for:
 - `libcariboulite`: SDR APIs library - including SoapySDR
 - `devicetrees`: linux device-trees overlays sources and binaries
 - `utils`: various utilities
+- `flash_fpga`: standalone FPGA .bin uploader (test-app [3]->[2] flow as a tool)
+- `tx_test`: standalone TX stream tester (never flashes; CDONE-checked)
 - `examples`: Example code - mainly C/C++ and python. Coming soon!
 
 # License

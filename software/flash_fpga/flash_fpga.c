@@ -32,9 +32,12 @@
 #include "io_utils/io_utils_spi.h"
 #include "caribou_fpga/caribou_fpga.h"
 
-/* Same candidate locations the test app expects for firmware/top.bin,
- * tried relative to the current directory, plus a system location. */
+/* Candidate locations tried when no path is given: the current directory
+ * first (release/ layout), then the same locations the test app expects
+ * for firmware/top.bin, tried relative to the current directory,
+ * plus a system location. */
 static const char *default_bin_paths[] = {
+	"top.bin",
 	"firmware/top.bin",
 	"../firmware/top.bin",
 	"../../firmware/top.bin",
@@ -50,7 +53,8 @@ static void print_usage(const char *prog)
 	printf("------------------------------------\n");
 	printf("Usage: %s [options] [path/to/top.bin]\n\n", prog);
 	printf("  path/to/top.bin   FPGA firmware .bin file (compiled output).\n");
-	printf("                    If omitted, firmware/top.bin is searched for\n");
+	printf("                    If omitted, top.bin is searched for in the\n");
+	printf("                    current directory, then firmware/top.bin\n");
 	printf("                    relative to the current directory.\n");
 	printf("Options:\n");
 	printf("  -v, --verbose     debug logging\n");
@@ -158,7 +162,7 @@ int main(int argc, char *argv[])
 		bin_file = find_default_bin();
 		if (bin_file == NULL)
 		{
-			ZF_LOGE("No firmware file given and firmware/top.bin was not found "
+			ZF_LOGE("No firmware file given and no top.bin found "
 					"in the default locations - aborting");
 			print_usage(argv[0]);
 			return -1;

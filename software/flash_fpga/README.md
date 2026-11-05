@@ -16,11 +16,13 @@ no SMI driver involvement.
 sudo flash_fpga [options] [path/to/top.bin]
 ```
 
-* The `.bin` path is optional - when omitted, `firmware/top.bin` is
-  searched relative to the current directory (same layout as the repo),
+* The `.bin` path is optional - when omitted, `top.bin` is searched for in
+  the current directory, then `firmware/top.bin` relative to the current
+  directory (same layout as the repo),
   then `/usr/share/cariboulite/top.bin`.
 * `-v` enables debug logging, `-h` prints usage.
-* Run from the repo root to pick up `firmware/top.bin` with no arguments.
+* Run from the repo root to pick up `firmware/top.bin`, or from `release/`
+  (after `make`) to pick up `top.bin`, with no arguments.
 
 The tool performs a hard reset (discarding the running firmware),
 programs the bitstream, soft-resets, prints the firmware versions and

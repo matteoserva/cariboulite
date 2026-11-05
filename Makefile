@@ -54,7 +54,6 @@ release: firmware flash_fpga tx_test driver
 	@u=$$(for f in $(TX_SRC) $(TX_NATIVE); do [ -x "$$f" ] && { echo "$$f"; break; }; done); \
 		 [ -n "$$u" ] || { echo "tx_test binary missing"; exit 1; }; cp -f "$$u" $(RELEASE_DIR)/tx_test
 	@[ -f $(KO_SRC) ] || { echo "driver module missing"; exit 1; }; cp -f $(KO_SRC) $(RELEASE_DIR)/
-	@cp -f driver/build-host/Module.symvers driver/build-host/modules.order $(RELEASE_DIR)/ 2>/dev/null || true
 	@echo "==> release/ contents:"
 	@ls -l $(RELEASE_DIR)
 

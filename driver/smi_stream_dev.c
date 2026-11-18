@@ -496,10 +496,12 @@ static void stream_smi_write_dma_callback(void *param)
 	uint8_t* buffer_pos;
 	stream_smi_check_and_restart(inst);
 	
-	inst->current_read_chunk++;
-	
+	/* Refill the period that just completed. The cyclic DMA has already moved
+	 * on to the next period, so advancing the index first overwrote the period
+	 * in flight and its first bytes went out stale (data 4 periods old). */
 	buffer_pos = (uint8_t*) smi_inst->bounce.buffer[0];
 	buffer_pos = &buffer_pos[ (DMA_BOUNCE_BUFFER_SIZE/4) * (inst->current_read_chunk % 4)];
+	inst->current_read_chunk++;
 	
 	if(kfifo_len (&inst->tx_fifo) >= DMA_BOUNCE_BUFFER_SIZE/4)
 	{
